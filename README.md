@@ -63,15 +63,17 @@ Installation hybride avec stockage tampon.
    Capteurs / actionneurs            Passerelles              Cœur                 Interfaces
  ─────────────────────────      ──────────────────     ─────────────────      ─────────────────
   SONOFF T/RH, prises      ──►   Zigbee2MQTT      ──►                    ──►   Tableaux de bord
-  Vannes thermostatiques   ──►   / Tasmota        ──►   Broker MQTT      ──►   Alertes (mobile)
-  Sondes ballons (1-Wire)  ──►   Passerelle 1-Wire──►   Moteur de règles ──►   API
-  Compteurs élec / onduleur──►   Modbus / P1      ──►   Base temporelle
+  Vannes thermostatiques   ──►   sur ZBBridge-P   ──►   Broker MQTT      ──►   Alertes (mobile)
+        [Zigbee]                 (Tasmota, TCP)         Moteur de règles ──►   API
+  Sondes ballons (1-Wire)  ──►   Passerelle 1-Wire──►   Base temporelle
+  Compteurs élec / onduleur──►   Modbus / P1      ──►
 ```
 
-**Briques pressenties** (à trancher) :
+**Briques pressenties** :
 - **Home Assistant** comme cœur d'intégration et d'automatisation.
 - **Mosquitto** (MQTT) comme bus de messages.
-- **Zigbee2MQTT** ou **Tasmota** pour les périphériques SONOFF (selon le modèle : Zigbee ou Wi-Fi).
+- **Zigbee2MQTT** pour tout le parc SONOFF — sondes T/RH, prises de clôture, vannes
+  thermostatiques. Un seul réseau Zigbee, un seul coordinateur, aucune dépendance au cloud eWeLink.
 - **InfluxDB / TimescaleDB + Grafana** pour l'historique long terme et les graphiques énergie.
 - Déploiement **Docker Compose** sur le **NAS Synology** (192.168.0.5).
 
@@ -93,11 +95,9 @@ ssh -i ~/.ssh/id_ed25519 erendil@192.168.0.5 'docker ps'
 ```
 
 **Points d'attention propres au NAS :**
-- **Passerelles radio** : la clé Zigbee/RF doit être branchée en USB sur le NAS et exposée au
-  conteneur (`devices:`), ou déportée via une passerelle réseau (Zigbee-over-IP / ser2net) si le
-  NAS n'est pas idéalement placé dans la maison.
-- **Réseau** : `network_mode: host` ou macvlan pour la découverte mDNS/UPnP des équipements
-  SONOFF et des onduleurs.
+- **Coordinateur Zigbee** : déporté sur une passerelle **SONOFF ZBBridge-P** (Tasmota, mode TCP).
+- **Réseau** : `network_mode: host` ou macvlan pour la découverte des onduleurs et compteurs IP
+  (le Zigbee, lui, ne dépend pas du réseau IP).
 - **Volumes persistants** : configuration et base temporelle sur un volume du NAS, inclus dans
   Hyper Backup.
 - **Disponibilité** : le NAS héberge des fonctions touchant à la sécurité (clôtures), d'où la
@@ -106,11 +106,75 @@ ssh -i ~/.ssh/id_ed25519 erendil@192.168.0.5 'docker ps'
 
 ---
 
+## 📡 Réseau Zigbee
+
+Tout le parc SONOFF (sondes T/RH, prises de clôture, vannes thermostatiques) est en **Zigbee**,
+géré par **Zigbee2MQTT** qui publie sur Mosquitto. Un seul coordinateur pour l'ensemble.
+
+### Coordinateur : SONOFF ZBBridge-P
+
+Matériel déjà disponible : une **passerelle SONOFF Zigbee Bridge Pro (ZBBridge-P)**. Elle sert de
+coordinateur **déporté**, relié à Zigbee2MQTT par TCP sur le Wi-Fi — le NAS n'a donc besoin
+d'aucun dongle USB, ce qui écarte d'emblée le problème des pilotes série DSM et celui du placement
+radio en baie.
+
+Le ZBBridge-P embarque un **ESP32** + une puce radio **CC2652** (protocole **ZNP**, à ne pas
+confondre avec le ZBBridge non-Pro qui est en EZSP). Mise en service, dans l'ordre :
+
+1. **Flasher Tasmota** sur l'ESP32 — build `Tasmota32 Sonoff-ZigbeeBridgePro`, qui contient déjà
+   les fichiers et le système de fichiers attendus. Pas de soudure nécessaire.
+2. **Flasher le firmware coordinateur** sur la puce CC2652, depuis Tasmota.
+3. **Basculer en mode TCP** : interface web → *Configuration* → *Auto-configuration* →
+   `Sonoff ZBPro TCP`. Tasmota ne fait alors plus que relayer le flux série ; les commandes Zigbee
+   de la console Tasmota ne sont plus disponibles.
+4. **Pointer Zigbee2MQTT** vers la passerelle :
+
+```yaml
+serial:
+  port: tcp://<ip-du-zbbridge>:8888   # port défini côté Tasmota
+  adapter: zstack                     # CC2652 / ZNP (et non ezsp, réservé au ZBBridge non-Pro)
+```
+
+> ⚠️ **Limite connue.** La documentation Zigbee2MQTT déconseille les ponts série **en Wi-Fi** :
+> tolérance insuffisante aux pertes de paquets et à la latence. C'est acceptable pour démarrer
+> sans rien acheter, mais à surveiller — si le réseau s'avère instable, deux replis : fixer l'IP
+> et soigner la couverture Wi-Fi du ZBBridge, ou passer à un dongle USB dédié (auquel cas il
+> faudra régler la question des pilotes série DSM).
+
+Conséquence pratique : **placer le ZBBridge-P au centre de gravité du parc**, pas à côté du NAS —
+au plus près du bâti et de la direction des extérieurs, avec une bonne couverture Wi-Fi. Son
+emplacement détermine toute la portée du réseau Zigbee.
+
+### Portée et maillage
+
+Le point sensible du projet, ce sont les **clôtures pour chevaux** : elles sont dehors, loin, et
+c'est la fonction la plus critique.
+
+- Les **prises SONOFF sur secteur sont des routeurs Zigbee** : elles étendent le maillage. Les
+  sondes T/RH sur pile, elles, sont des terminaux et ne relaient rien.
+- Prévoir des **prises-relais intermédiaires** (grange, dépendance, abri) pour construire une
+  chaîne jusqu'aux électrificateurs.
+- Si la distance reste hors de portée, ne pas forcer le Zigbee : envisager du **LoRa / 868 MHz**
+  ou un second réseau pour les points éloignés.
+
+### Bonnes pratiques
+
+- **Canal Zigbee** choisi pour ne pas recouvrir le Wi-Fi 2,4 GHz (typiquement canal 15, 20 ou 25).
+- **Canal Wi-Fi du ZBBridge-P** choisi lui aussi pour ne pas se recouvrir avec le canal Zigbee : la passerelle émet en Wi-Fi et en Zigbee sur la même bande 2,4 GHz.
+- **Sauvegarder la clé réseau et le coordinator backup** de Zigbee2MQTT — sans eux, ré-appairer
+  tout le parc, y compris les capteurs hors d'atteinte.
+- **Noms stables** : `friendly_name` explicites (`cloture.pre_nord`, `zone.salon`), jamais l'adresse IEEE dans les automatisations.
+- **Batteries** : alerte sur niveau faible et sur capteur muet depuis X heures (un capteur qui se
+  tait est plus dangereux qu'un capteur qui remonte une valeur fausse).
+
+---
+
 ## 🚦 État du projet
 
 🌱 **Phase 0 — Cadrage.** Rien n'est encore déployé. Prochaines étapes :
 
-- [ ] Inventorier précisément le matériel existant (modèles SONOFF, type de sondes, compteurs, onduleurs).
+- [ ] Inventorier précisément le matériel existant (modèles SONOFF Zigbee, type de sondes, compteurs, onduleurs).
+- [ ] Flasher le ZBBridge-P (Tasmota + firmware CC2652) et le basculer en mode TCP.
 - [ ] Choisir le cœur domotique et la stratégie de persistance.
 - [ ] Schématiser l'installation hydraulique (chaudières, tampon, ECS, zones) et placer les sondes.
 - [ ] Mettre en place le socle sur le NAS (Docker Compose) : broker MQTT + cœur domotique + base temporelle.
