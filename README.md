@@ -29,7 +29,7 @@ Installation hybride avec stockage tampon.
 | Chaudière **bois** | Source principale | Température de départ, détection de flambée, fin de combustion |
 | **Ballon tampon** | Stockage hydraulique | Sondes de stratification (haut / milieu / bas), énergie stockée |
 | **2 × ballons ECS** | Eau chaude sanitaire | Température, priorité de charge, appoint électrique |
-| **Zones de chauffe** | Distribution | Vannes thermostatiques + sondes T/RH SONOFF par pièce/zone |
+| **Zones de chauffe** | Distribution | Vannes **SONOFF TRV-ZBT** + sondes **SONOFF SNZB-02D** (T/RH) par pièce/zone |
 
 **Logique cible :**
 - Le bois est prioritaire ; le fioul ne démarre que si le tampon descend sous un seuil et que le bois ne monte pas.
@@ -38,16 +38,17 @@ Installation hybride avec stockage tampon.
 
 ### 2. Clôtures électriques (chevaux)
 
-- Commande marche/arrêt des électrificateurs via **prises connectées SONOFF**.
-- Surveillance de la consommation des prises pour détecter une coupure ou un électrificateur hors service.
+- Commande marche/arrêt des électrificateurs via prises **SONOFF S60ZBTPF** (16 A, mesure d'énergie).
+- Surveillance de la puissance mesurée par la prise pour détecter une coupure ou un électrificateur hors service.
+- `power_on_behavior = on` : retour automatique de la clôture après coupure secteur, sans dépendre du serveur.
 - Alerte immédiate en cas de perte de clôture (sécurité animale prioritaire).
 
 ### 3. Énergie
 
-- **Consommation électrique** : global + sous-comptage par usage (chauffage, ECS, clôtures, maison).
+- **Consommation électrique** : Linky (TIC) au point de livraison + **Socomec DIRIS Digiware** (M-50 / U-30 / I-35) en Modbus TCP pour le sous-comptage par départ, complétés par les S60ZBTPF.
 - **Production hydro** : suivi de puissance et d'énergie produite, détection d'arrêt (crue, colmatage, défaut).
 - **Production solaire** : puissance instantanée, production journalière, prévision.
-- **Bilan** : autoconsommation, surplus, déclenchement de charges opportunistes (ECS, autres) sur excédent.
+- **Bilan** : soutirage / injection relevés au Linky, autoconsommation, surplus, déclenchement de charges opportunistes (ECS, autres) sur excédent.
 
 ### 4. Potager
 
@@ -62,18 +63,21 @@ Installation hybride avec stockage tampon.
 ```
    Capteurs / actionneurs            Passerelles              Cœur                 Interfaces
  ─────────────────────────      ──────────────────     ─────────────────      ─────────────────
-  SONOFF T/RH, prises      ──►   Zigbee2MQTT      ──►                    ──►   Tableaux de bord
-  Vannes thermostatiques   ──►   sur ZBBridge-P   ──►   Broker MQTT      ──►   Alertes (mobile)
-        [Zigbee]                 (Tasmota, TCP)         Moteur de règles ──►   API
-  Sondes ballons (1-Wire)  ──►   Passerelle 1-Wire──►   Base temporelle
-  Compteurs élec / onduleur──►   Modbus / P1      ──►
+  SNZB-02D, S60ZBTPF       ──►                                          ──►   Tableaux de bord
+  TRV-ZBT                  ──►   Zigbee2MQTT      ──►   Broker MQTT     ──►   Alertes (mobile)
+  ZLinky_TIC               ──►   sur ZBBridge-P   ──►                   ──►   API
+        [Zigbee]                 (Tasmota, TCP)         Moteur de règles
+                                                        Base temporelle
+  Socomec Digiware         ──►   M-50 (Modbus TCP)──►
+  Sondes ballons           ──►   Passerelle 1-Wire──►
 ```
 
 **Briques pressenties** :
 - **Home Assistant** comme cœur d'intégration et d'automatisation.
 - **Mosquitto** (MQTT) comme bus de messages.
-- **Zigbee2MQTT** pour tout le parc SONOFF — sondes T/RH, prises de clôture, vannes
-  thermostatiques. Un seul réseau Zigbee, un seul coordinateur, aucune dépendance au cloud eWeLink.
+- **Zigbee2MQTT** pour le parc radio — SNZB-02D, S60ZBTPF, TRV-ZBT et ZLinky_TIC.
+  Un seul réseau Zigbee, un seul coordinateur, aucune dépendance au cloud eWeLink.
+- **Modbus TCP** vers le DIRIS Digiware M-50 pour le comptage de tableau.
 - **InfluxDB / TimescaleDB + Grafana** pour l'historique long terme et les graphiques énergie.
 - Déploiement **Docker Compose** sur le **NAS Synology** (192.168.0.5).
 
@@ -108,8 +112,8 @@ ssh -i ~/.ssh/id_ed25519 erendil@192.168.0.5 'docker ps'
 
 ## 📡 Réseau Zigbee
 
-Tout le parc SONOFF (sondes T/RH, prises de clôture, vannes thermostatiques) est en **Zigbee**,
-géré par **Zigbee2MQTT** qui publie sur Mosquitto. Un seul coordinateur pour l'ensemble.
+Tout le parc SONOFF (SNZB-02D, S60ZBTPF, TRV-ZBT) est en **Zigbee**, géré par
+**Zigbee2MQTT** qui publie sur Mosquitto. Un seul coordinateur pour l'ensemble.
 
 ### Coordinateur : SONOFF ZBBridge-P
 
@@ -145,6 +149,75 @@ Conséquence pratique : **placer le ZBBridge-P au centre de gravité du parc**, 
 au plus près du bâti et de la direction des extérieurs, avec une bonne couverture Wi-Fi. Son
 emplacement détermine toute la portée du réseau Zigbee.
 
+### Parc d'équipements
+
+| Modèle | Rôle | Alimentation | Rôle réseau |
+|---|---|---|---|
+| **SONOFF SNZB-02D** | Sonde T/RH avec écran, par zone | Pile CR2450 | Terminal (ne route pas) |
+| **SONOFF TRV-ZBT** (TRVZB) | Vanne thermostatique de radiateur | Piles | Terminal (ne route pas) |
+| **SONOFF S60ZBTPF** (iPlug S60) | Commande + mesure des électrificateurs et des usages élec | Secteur, 16 A | **Routeur** (étend le maillage) |
+| **SONOFF ZBBridge-P** | Coordinateur | Secteur | Coordinateur |
+
+⚠️ **Conséquence importante** : sondes et vannes sont toutes sur pile, donc **terminaux**. Les
+seuls routeurs du réseau seront les **prises sur secteur**. Le maillage dépend donc entièrement
+d'elles — il faudra en prévoir davantage que le strict nécessaire fonctionnel, uniquement pour
+tenir le réseau.
+
+**SNZB-02D** — expose `temperature`, `humidity`, `battery`, plus la calibration
+(`temperature_calibration`, `humidity_calibration`), la précision, les seuils de confort
+(`comfort_temperature_min/max`, `comfort_humidity_min/max`) et l'unité d'affichage. À savoir :
+il faut **réveiller la sonde par le bouton arrière** avant d'écrire les seuils de confort ou
+l'unité, sinon l'écriture est perdue. Mise à jour OTA supportée.
+
+**TRV-ZBT / TRVZB** — expose un `climate` complet : modes `off` / `auto` / `heat`, consigne de
+4 à 35 °C, `local_temperature` et sa calibration (−12,7 à +12,7 °C), état `running_state`.
+Côté avancé : `valve_opening_degree` / `valve_closing_degree` (0–100 %), programmation
+hebdomadaire jusqu'à 6 transitions par jour, modes **boost** et **timer**, **détection de fenêtre
+ouverte** (coupure si la température chute de plus de 1,5 °C en 4,5 min), **hors-gel** actif même
+en mode `off`, et **verrouillage enfant**. Un algorithme **PID** interne est disponible, mais il
+désactive le pilotage manuel du pourcentage d'ouverture. Le niveau de batterie peut mettre 24 h à
+se stabiliser après l'appairage, et la vanne doit être **correctement montée pour se calibrer**.
+
+**S60ZBTPF** — prise 16 A avec **mesure d'énergie**, protection de surcharge, successeur des S31 ZB
+et S40ZBTPB Lite. Expose `switch`, `power`, `voltage`, `current`, `energy`, plus les compteurs
+`energy_today` / `energy_yesterday` / `energy_month`, et les réglages `power_on_behavior`,
+`overload_protection`, `outlet_control_protect`, `inching_control_set`. Nécessite un
+**herdsman-converters ≥ 23.41.0** pour que les données d'énergie soient exposées.
+
+Deux usages dans le projet, et c'est la pièce la plus polyvalente du parc :
+
+- **Clôtures** : commande on/off de l'électrificateur, et surtout `power` comme **témoin de bon
+  fonctionnement** — un électrificateur qui ne consomme plus est un électrificateur en panne, bien
+  avant que le cheval ne s'en aperçoive.
+- **Sous-comptage électrique** : `energy_*` donne la ventilation par usage (appoint ECS, annexes)
+  sans poser de compteur supplémentaire.
+
+> 🔒 **`power_on_behavior` est un réglage de sécurité ici.** Sur les prises de clôture, il doit être
+> fixé à **`on`** : après une coupure secteur, la clôture doit se ré-alimenter seule, sans attendre
+> que le NAS, le Wi-Fi et Zigbee2MQTT soient revenus. C'est l'application concrète du principe de
+> dégradation sûre.
+
+### Régulation par sonde déportée
+
+Le point d'architecture clé du chauffage : la sonde interne du TRV mesure la température **au
+radiateur**, pas celle de la pièce — elle est donc systématiquement biaisée. Le TRVZB sait
+utiliser une sonde externe :
+
+- `temperature_sensor_select` : `internal` | `external` | `external_2` | `external_3`
+- `external_temperature_input` : la valeur injectée depuis l'extérieur
+
+En mode externe, **la calibration locale devient inutile**. C'est le bon montage : la **SNZB-02D**
+de la zone devient la référence de régulation du **TRV-ZBT** correspondant.
+
+> ⚠️ **Zigbee2MQTT ne fait pas la synchronisation.** Il expose seulement le champ ; c'est à nous de
+> republier périodiquement la valeur de la SNZB-02D vers `external_temperature_input` du TRV, via
+> une automatisation. Il faut donc gérer explicitement le cas **sonde muette** (pile vide, hors de
+> portée) : sans rafraîchissement, le TRV régule sur une valeur figée. Prévoir un repli automatique
+> sur `internal` au-delà d'un délai sans mise à jour.
+
+Nécessite **Zigbee2MQTT ≥ 2.1.2**. Si le champ n'apparaît pas, mettre à jour Z2M et le convertisseur
+avant de chercher plus loin.
+
 ### Portée et maillage
 
 Le point sensible du projet, ce sont les **clôtures pour chevaux** : elles sont dehors, loin, et
@@ -169,11 +242,75 @@ c'est la fonction la plus critique.
 
 ---
 
+## ⚡ Comptage électrique
+
+Deux sources complémentaires, de natures très différentes : le **Linky** au point de livraison
+(la frontière avec le réseau) et une **centrale de mesure Socomec DIRIS Digiware** pour la
+ventilation interne des départs.
+
+### Socomec DIRIS Digiware — M-50 + U-30 + I-35
+
+C'est le comptage de précision, en tableau :
+
+| Module | Rôle |
+|---|---|
+| **M-50** | Passerelle de communication — point d'accès unique du système Digiware (alimentation + communication de toute la chaîne) |
+| **U-30** | Module de mesure de **tension** |
+| **I-35** | Module de mesure de **courant** (capteurs par départ) |
+
+Les modules U/I dialoguent entre eux sur le **bus Digiware**, et le **M-50** expose l'ensemble vers
+l'extérieur. Il supporte **Modbus RTU, Modbus TCP, BACnet IP et SNMP**, en RS485 ou Ethernet, et
+fait passerelle **Modbus RTU → Modbus TCP**.
+
+**Intégration :** le M-50 est raccordé en **Ethernet** et interrogé en **Modbus TCP** par Home
+Assistant — c'est le chemin le plus simple, sans convertisseur série, et il place le comptage sur
+le réseau IP plutôt que sur le Zigbee (donc sans charger le maillage radio).
+
+> ⚙️ **Alimentation 24 VDC.** Le M-50 demande du 24 VDC ±10 % (≈ 2,5 VA) et alimente le bus
+> Digiware. À prévoir au tableau — ce n'est pas une alimentation à négliger dans le plan.
+
+À faire au moment de l'intégration : relever la **table des registres Modbus** des grandeurs
+utiles (P, Q, S, U, I, cos φ, index d'énergie) par départ, et figer une correspondance
+départ physique → usage (chauffage, ECS, clôtures, annexes, hydro, solaire). C'est ce mapping,
+plus que la lecture Modbus elle-même, qui demande du soin.
+
+### Linky — télé-information client (TIC)
+
+Le Linky donne la vue « point de livraison » : soutirage, **injection** (essentiel avec l'hydro et
+le solaire), index par tarif, puissance apparente, tension.
+
+**Solution retenue : LiXee ZLinky_TIC** — un lecteur TIC **en Zigbee**, donc directement intégré au
+réseau Zigbee2MQTT existant, sans passerelle supplémentaire ni câblage réseau jusqu'au Linky. Il
+est alimenté par le Linky lui-même.
+
+- Expose plus de **80 grandeurs** : puissance active soutirée **et injectée**, index multi-tarifs
+  (`EASF01`…`EASF10`), tension, courant et puissance apparente par phase, informations tarifaires,
+  registres d'état.
+- Réglage **`linky_mode`** : `historique` ou `standard` — laisser sur **`auto`** pour la détection
+  automatique. Un redémarrage peut être nécessaire pour la prise en compte.
+- Le mode **standard** est nettement plus riche (et seul à remonter proprement l'injection) : si le
+  compteur est encore en `historique`, demander le passage en `standard` à Enedis.
+
+### Répartition des rôles
+
+- **Linky / ZLinky** → bilan avec le réseau : soutirage, injection, autoconsommation, tarifs.
+  C'est la référence de facturation et le déclencheur des charges opportunistes sur surplus.
+- **Socomec Digiware** → ventilation interne par départ, avec une précision et une granularité que
+  le Linky ne donne pas.
+- Les **S60ZBTPF** → comptage d'appoint là où tirer un TI au tableau n'a pas de sens (prises
+  isolées, annexes, électrificateurs).
+
+---
+
 ## 🚦 État du projet
 
 🌱 **Phase 0 — Cadrage.** Rien n'est encore déployé. Prochaines étapes :
 
-- [ ] Inventorier précisément le matériel existant (modèles SONOFF Zigbee, type de sondes, compteurs, onduleurs).
+- [ ] Inventorier le matériel : nombre de SNZB-02D et de TRV-ZBT par zone, S60ZBTPF, compteurs, onduleurs.
+- [ ] Cartographier la portée Zigbee jusqu'aux clôtures et placer les S60ZBTPF-relais en conséquence.
+- [ ] Relever la table des registres Modbus du DIRIS Digiware et mapper départ physique → usage.
+- [ ] Vérifier le mode TIC du Linky (`standard` requis pour l'injection) et poser le ZLinky_TIC.
+- [ ] Écrire la synchronisation SNZB-02D → `external_temperature_input` des TRV, avec repli sur sonde interne.
 - [ ] Flasher le ZBBridge-P (Tasmota + firmware CC2652) et le basculer en mode TCP.
 - [ ] Choisir le cœur domotique et la stratégie de persistance.
 - [ ] Schématiser l'installation hydraulique (chaudières, tampon, ECS, zones) et placer les sondes.
