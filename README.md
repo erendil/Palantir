@@ -262,9 +262,26 @@ Les modules U/I dialoguent entre eux sur le **bus Digiware**, et le **M-50** exp
 l'extérieur. Il supporte **Modbus RTU, Modbus TCP, BACnet IP et SNMP**, en RS485 ou Ethernet, et
 fait passerelle **Modbus RTU → Modbus TCP**.
 
-**Intégration :** le M-50 est raccordé en **Ethernet** et interrogé en **Modbus TCP** par Home
-Assistant — c'est le chemin le plus simple, sans convertisseur série, et il place le comptage sur
-le réseau IP plutôt que sur le Zigbee (donc sans charger le maillage radio).
+**Intégration — trois voies IP possibles, qui ne se valent pas côté Home Assistant :**
+
+| Protocole | Support Home Assistant | Rôle retenu |
+|---|---|---|
+| **Modbus TCP** | Intégration native et mature, accès à toute la table de mesure | ✅ **Voie principale** — toutes les grandeurs électriques |
+| **SNMP** | Plateforme `sensor` native, mais un capteur = un OID (verbeux pour de la mesure) | 🩺 **Supervision de la passerelle** : est-elle vivante, a-t-elle redémarré |
+| **BACnet IP** | Pas d'intégration native, nécessite un pont tiers BACnet → MQTT | 🔁 **Repli** si le Modbus pose problème |
+
+Le M-50 est donc raccordé en **Ethernet** et interrogé en **Modbus TCP** : pas de convertisseur
+série, et le comptage passe par le réseau IP plutôt que par le Zigbee (sans charger le maillage
+radio).
+
+**SNMP garde un usage propre** et complémentaire : il répond à une question que le Modbus traite
+mal — *la passerelle est-elle vivante ?* Un timeout Modbus ne dit pas si le problème vient du M-50,
+du bus Digiware ou du réseau. Le suivi de `sysUpTime` en SNMP tranche, et explique après coup les
+trous dans l'historique. Voir `config/homeassistant/packages/comptage_diris.yaml`.
+
+Si le BACnet devient nécessaire, il faudra ajouter un conteneur passerelle **BACnet → MQTT** à la
+pile ; Home Assistant consommera alors du MQTT, comme pour le Zigbee, sans intégration
+supplémentaire.
 
 > ⚙️ **Alimentation 24 VDC.** Le M-50 demande du 24 VDC ±10 % (≈ 2,5 VA) et alimente le bus
 > Digiware. À prévoir au tableau — ce n'est pas une alimentation à négliger dans le plan.
@@ -334,11 +351,68 @@ est alimenté par le Linky lui-même.
 
 ```
 palantir/
-├── README.md              # ce fichier
-├── docker-compose.yml     # pile de services déployée sur le NAS (à venir)
-├── config/                # configuration des services, versionnée (à venir)
-└── docs/                  # schémas, inventaire matériel, notes d'installation (à venir)
+├── README.md                       # ce fichier
+├── docker-compose.yml              # la pile de services déployée sur le NAS
+├── .env.example                    # modèle des variables et secrets (copier vers .env)
+├── config/                         # configuration versionnée
+│   ├── mosquitto/
+│   │   └── mosquitto.conf          # broker MQTT, accès anonyme interdit
+│   ├── zigbee2mqtt/
+│   │   ├── configuration.yaml      # coordinateur ZBBridge-P en TCP, canal, availability
+│   │   ├── devices.yaml            # équipements + convention de nommage
+│   │   └── groups.yaml
+│   ├── homeassistant/
+│   │   ├── configuration.yaml      # socle, découpage en packages
+│   │   ├── influxdb.yaml           # historisation longue durée
+│   │   ├── modbus.yaml             # DIRIS Digiware (squelette à compléter)
+│   │   ├── secrets.yaml.example    # modèle des secrets (copier vers secrets.yaml)
+│   │   └── packages/
+│   │       ├── chauffage.yaml      # sonde déportée TRV + replis
+│   │       ├── clotures.yaml       # surveillance et alertes clôtures
+│   │       ├── comptage_diris.yaml # Modbus / SNMP / BACnet, supervision M-50
+│   │       ├── energie.yaml        # bilan réseau, surplus, production
+│   │       └── potager.yaml        # gel, arrosage (à écrire)
+│   └── grafana/provisioning/       # source de données et tableaux de bord
+├── data/                           # volumes d'exécution — NON versionné
+└── docs/                           # schémas, inventaire matériel (à venir)
 ```
+
+**Ce qui n'est pas versionné**, et pourquoi : `.env`, `secrets.yaml` et `config/mosquitto/passwd`
+contiennent des secrets ; `data/` contient les volumes d'exécution ; la base d'appairage
+Zigbee2MQTT et le `coordinator_backup.json` contiennent la **clé réseau Zigbee**. Ces derniers
+doivent malgré tout être **sauvegardés** (Hyper Backup) : sans eux, tout le parc est à ré-appairer,
+capteurs inaccessibles compris.
+
+---
+
+## ▶️ Premier démarrage
+
+```bash
+# 1. Secrets
+cp .env.example .env                                    # puis renseigner
+cp config/homeassistant/secrets.yaml.example \
+   config/homeassistant/secrets.yaml                    # puis renseigner
+openssl rand -hex 32                                    # pour chaque jeton
+
+# 2. Utilisateur MQTT (le mot de passe doit correspondre à MQTT_PASSWORD)
+docker run --rm -it -v "$PWD/config/mosquitto:/m" eclipse-mosquitto:2 \
+  mosquitto_passwd -c -b /m/passwd palantir '<mot-de-passe>'
+
+# 3. Démarrage
+docker compose up -d
+docker compose logs -f zigbee2mqtt
+```
+
+**Prérequis avant de lancer la pile :**
+
+- Le **ZBBridge-P est flashé** (Tasmota + firmware CC2652) et basculé en mode `Sonoff ZBPro TCP`.
+- Le ZBBridge-P **et** le DIRIS M-50 ont une **IP fixe** (réservation DHCP) : elles sont inscrites
+  en dur dans `.env`.
+- Le **canal Zigbee est figé** dans `configuration.yaml` **avant le premier appairage** — en
+  changer ensuite impose de tout ré-appairer.
+
+**Accès :** Home Assistant `:8123` · Zigbee2MQTT `:8081` · Grafana `:3000` · InfluxDB `:8086`.
+Le port 8081 est retenu pour Zigbee2MQTT car 8080 est fréquemment déjà pris sur un NAS Synology.
 
 ---
 

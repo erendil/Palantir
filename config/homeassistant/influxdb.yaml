@@ -1,0 +1,29 @@
+# Palantír — historisation longue durée
+#
+# Home Assistant garde 14 jours en base interne (recorder) ; tout ce qui a une
+# valeur dans la durée — énergie, températures, production — part ici.
+
+api_version: 2
+ssl: false
+host: !secret influxdb_host
+port: 8086
+token: !secret influxdb_token
+organization: !secret influxdb_org
+bucket: !secret influxdb_bucket
+
+max_retries: 3
+
+include:
+  domains:
+    - sensor
+    - binary_sensor
+    - climate
+    - switch
+
+exclude:
+  entity_globs:
+    # Bruit sans intérêt historique
+    - sensor.*_linkquality
+    - sensor.*_last_seen
+    - sensor.*_update_state
+    - sensor.uptime*

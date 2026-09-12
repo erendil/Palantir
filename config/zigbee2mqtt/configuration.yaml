@@ -1,0 +1,77 @@
+# Palantír — Zigbee2MQTT
+#
+# Coordinateur : SONOFF ZBBridge-P sous Tasmota, en mode « Sonoff ZBPro TCP ».
+# Les valeurs !env sont fournies par docker-compose à partir de .env.
+#
+# ⚠️ Ce fichier est réécrit par Zigbee2MQTT lors des changements faits depuis
+#    l'interface web (appairages, renommages). Les modifications manuelles se
+#    font conteneur arrêté.
+
+version: 4
+
+homeassistant:
+  enabled: true
+
+mqtt:
+  base_topic: palantir/zigbee
+  server: mqtt://mosquitto:1883
+  user: !env ZIGBEE2MQTT_CONFIG_MQTT_USER
+  password: !env ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD
+  # L'état du parc reste disponible pour un client qui se reconnecte.
+  force_disable_retain: false
+
+serial:
+  # tcp://<ip-du-zbbridge>:8888 — injecté depuis .env
+  port: !env ZIGBEE2MQTT_CONFIG_SERIAL_PORT
+  # CC2652 / protocole ZNP. Le ZBBridge non-Pro serait en ezsp.
+  adapter: zstack
+
+advanced:
+  # Canal choisi hors des canaux Wi-Fi 2,4 GHz les plus chargés (1/6/11).
+  # À figer AVANT le premier appairage : en changer ensuite impose de
+  # ré-appairer tout le parc.
+  channel: 25
+
+  # La clé réseau est générée au premier démarrage puis écrite ici.
+  # ⚠️ Sans elle ni le coordinator_backup.json, tout le parc est à ré-appairer,
+  #    y compris les capteurs difficiles d'accès. À inclure dans Hyper Backup.
+  network_key: GENERATE
+  pan_id: GENERATE
+  ext_pan_id: GENERATE
+
+  log_level: info
+  log_output:
+    - console
+  # Horodatage des messages par Zigbee2MQTT, utile pour détecter un capteur muet.
+  last_seen: ISO_8601
+  # Qualité du lien radio : indispensable pour diagnostiquer la portée
+  # jusqu'aux clôtures.
+  elapsed: true
+
+frontend:
+  enabled: true
+  port: 8080
+  auth_token: !env ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN
+
+# Appairage laissé fermé par défaut : on ouvre depuis l'interface web au moment
+# d'ajouter un équipement, puis on referme.
+permit_join: false
+
+availability:
+  enabled: true
+  active:
+    # Équipements sur secteur (S60ZBTPF, ZLinky_TIC) : détection rapide.
+    timeout: 10
+  passive:
+    # Équipements sur pile (SNZB-02D, TRV-ZBT) : ils ne parlent que rarement,
+    # un délai court produirait de fausses alertes d'indisponibilité.
+    timeout: 1500
+
+# Mises à jour OTA : jamais automatiques. Une OTA interrompue sur une vanne ou
+# un capteur hors d'accès est coûteuse à rattraper.
+ota:
+  disable_automatic_update_check: false
+  update_check_interval: 1440
+
+devices: devices.yaml
+groups: groups.yaml

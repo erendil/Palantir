@@ -1,0 +1,134 @@
+# Palantír — pile de services domotique
+#
+# Déploiement : Docker sur le NAS Synology (192.168.0.5).
+# Copier .env.example vers .env et renseigner les valeurs avant le premier démarrage.
+#
+#   docker compose up -d
+#
+# Ordre de démarrage : Mosquitto → Zigbee2MQTT → Home Assistant.
+# Zigbee2MQTT se connecte au coordinateur SONOFF ZBBridge-P en TCP (pas de périphérique USB).
+
+name: palantir
+
+services:
+
+  # ── Bus de messages ────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: palantir-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # MQTT over WebSocket
+    volumes:
+      - ./config/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./config/mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./data/mosquitto/data:/mosquitto/data
+      - ./data/mosquitto/log:/mosquitto/log
+    environment:
+      TZ: ${TZ}
+    networks:
+      - palantir
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-u", "${MQTT_USER}", "-P", "${MQTT_PASSWORD}", "-t", "$$SYS/broker/uptime", "-C", "1", "-W", "5"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Passerelle Zigbee ──────────────────────────────────────────────────────
+  # Coordinateur : SONOFF ZBBridge-P sous Tasmota, en mode « Sonoff ZBPro TCP ».
+  # Puce CC2652 → adapter zstack (et non ezsp, réservé au ZBBridge non-Pro).
+  zigbee2mqtt:
+    image: ghcr.io/koenkk/zigbee2mqtt:latest
+    container_name: palantir-zigbee2mqtt
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    ports:
+      - "${Z2M_PORT}:8080"   # interface web
+    volumes:
+      - ./config/zigbee2mqtt:/app/data
+      - /run/udev:/run/udev:ro
+    environment:
+      TZ: ${TZ}
+      # Injectés dans configuration.yaml via la syntaxe !env
+      ZIGBEE2MQTT_CONFIG_MQTT_USER: ${MQTT_USER}
+      ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: ${MQTT_PASSWORD}
+      ZIGBEE2MQTT_CONFIG_SERIAL_PORT: tcp://${ZBBRIDGE_HOST}:${ZBBRIDGE_PORT}
+      ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN: ${Z2M_AUTH_TOKEN}
+    networks:
+      - palantir
+
+  # ── Base de données temporelle ─────────────────────────────────────────────
+  influxdb:
+    image: influxdb:2.7
+    container_name: palantir-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./data/influxdb/data:/var/lib/influxdb2
+      - ./data/influxdb/config:/etc/influxdb2
+    environment:
+      TZ: ${TZ}
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USER}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_RETENTION: ${INFLUXDB_RETENTION}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    networks:
+      - palantir
+
+  # ── Tableaux de bord ───────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: palantir-grafana
+    restart: unless-stopped
+    depends_on:
+      - influxdb
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      TZ: ${TZ}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
+      # Repris par le provisioning de la source de données
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+    networks:
+      - palantir
+
+  # ── Cœur domotique ─────────────────────────────────────────────────────────
+  # network_mode: host — nécessaire à la découverte des équipements IP
+  # (onduleurs, DIRIS Digiware M-50, mDNS/SSDP). Les ports ne sont donc pas
+  # publiés ici : Home Assistant écoute directement sur 8123 du NAS.
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: palantir-homeassistant
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    network_mode: host
+    privileged: true
+    volumes:
+      - ./config/homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      TZ: ${TZ}
+
+networks:
+  palantir:
+    name: palantir
+    driver: bridge

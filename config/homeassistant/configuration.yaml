@@ -1,0 +1,42 @@
+# Palantír — Home Assistant
+#
+# Le découpage se fait en « packages » : un fichier par domaine fonctionnel
+# dans packages/, ce qui garde ce fichier court et rend chaque domaine lisible
+# isolément.
+
+default_config:
+
+homeassistant:
+  name: Palantír
+  # Renseigner latitude / longitude / elevation dans secrets.yaml :
+  # indispensables au calcul de la course du soleil (prévision solaire,
+  # chauffage, arrosage du potager).
+  latitude: !secret home_latitude
+  longitude: !secret home_longitude
+  elevation: !secret home_elevation
+  unit_system: metric
+  currency: EUR
+  country: FR
+  time_zone: Europe/Paris
+  packages: !include_dir_named packages
+
+# Home Assistant tourne en network_mode: host, derrière un éventuel reverse
+# proxy sur le NAS.
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - 172.16.0.0/12
+
+# Base longue durée. La base SQLite interne ne garde que le court terme ;
+# l'historique énergie part dans InfluxDB.
+recorder:
+  purge_keep_days: 14
+  commit_interval: 5
+
+influxdb: !include influxdb.yaml
+modbus: !include modbus.yaml
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml

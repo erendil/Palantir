@@ -1,0 +1,88 @@
+# Palantír — Socomec DIRIS Digiware, via la passerelle M-50
+#
+# Le M-50 expose le système Digiware (modules U-30 tension, I-35 courant) en
+# Modbus TCP, BACnet IP et SNMP. Modbus TCP est retenu ici parce que c'est la
+# seule des trois avec une intégration native et bien rodée dans Home Assistant.
+# Les deux autres restent disponibles — voir packages/comptage_diris.yaml.
+#
+# ⚠️ SQUELETTE À COMPLÉTER.
+#    Les adresses de registres ci-dessous sont des emplacements réservés. Il
+#    faut les relever dans la table Modbus de la documentation Socomec pour la
+#    configuration réelle, puis vérifier chaque grandeur une par une.
+#
+#    Deux pièges classiques :
+#      - Chaque module Digiware a son propre esclave Modbus derrière le M-50 :
+#        c'est `slave` qui distingue les départs, pas l'adresse du registre.
+#      - Socomec publie en général les puissances et énergies sur 32 bits
+#        (deux registres) avec un facteur d'échelle. D'où `data_type: int32`
+#        et `scale` — à confirmer par le manuel, une erreur ici donne des
+#        valeurs plausibles mais fausses.
+
+- name: diris
+  type: tcp
+  host: !secret diris_host
+  port: 502
+  delay: 5
+  timeout: 5
+  message_wait_milliseconds: 50
+
+  sensors:
+
+    # ── Départ 1 : exemple à dupliquer par départ mesuré ────────────────────
+    - name: "DIRIS départ 1 puissance active"
+      unique_id: diris_depart1_power
+      slave: 1
+      address: 50536          # TODO: relever dans la table Modbus Socomec
+      input_type: holding
+      data_type: int32
+      count: 2
+      scale: 0.01            # TODO: confirmer le facteur d'échelle
+      precision: 0
+      unit_of_measurement: W
+      device_class: power
+      state_class: measurement
+      scan_interval: 10
+
+    - name: "DIRIS départ 1 énergie active"
+      unique_id: diris_depart1_energy
+      slave: 1
+      address: 50780          # TODO
+      input_type: holding
+      data_type: int64
+      count: 4
+      scale: 0.001           # TODO
+      precision: 3
+      unit_of_measurement: kWh
+      device_class: energy
+      # total_increasing : compteur qui ne décroît qu'à la remise à zéro.
+      # Indispensable pour que le tableau de bord Énergie l'accepte.
+      state_class: total_increasing
+      scan_interval: 60
+
+    - name: "DIRIS départ 1 tension"
+      unique_id: diris_depart1_voltage
+      slave: 1
+      address: 50520          # TODO
+      input_type: holding
+      data_type: uint32
+      count: 2
+      scale: 0.01            # TODO
+      precision: 1
+      unit_of_measurement: V
+      device_class: voltage
+      state_class: measurement
+      scan_interval: 30
+
+    - name: "DIRIS départ 1 courant"
+      unique_id: diris_depart1_current
+      slave: 1
+      address: 50528          # TODO
+      input_type: holding
+      data_type: uint32
+      count: 2
+      scale: 0.001           # TODO
+      precision: 2
+      unit_of_measurement: A
+      device_class: current
+      state_class: measurement
+      scan_interval: 30

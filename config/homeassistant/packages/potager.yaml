@@ -1,0 +1,43 @@
+# Palantír — potager
+#
+# Phase d'observation d'abord : on instrumente et on regarde une saison avant
+# d'automatiser l'arrosage. Un arrosage piloté sur des seuils mal calibrés fait
+# plus de dégâts qu'un arrosage manuel.
+
+template:
+  - binary_sensor:
+      # Alerte gel : le seuil est à 2 °C et non 0 °C — au niveau du sol, la
+      # température descend plus bas que celle mesurée par la sonde, et il faut
+      # du temps pour aller couvrir les cultures.
+      - name: "Risque de gel au potager"
+        unique_id: potager_risque_gel
+        device_class: cold
+        state: >-
+          {{ (states('sensor.potager_temperature') | float(99)) < 2 }}
+        availability: >-
+          {{ states('sensor.potager_temperature') not in
+             ['unknown', 'unavailable', 'none'] }}
+
+automation:
+  - id: potager_alerte_gel
+    alias: "Potager — risque de gel"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.potager_risque_gel
+        to: "on"
+        for: "00:10:00"
+    actions:
+      - action: notify.persistent_notification
+        data:
+          title: "❄️ Potager"
+          message: >-
+            {{ states('sensor.potager_temperature') }} °C au potager.
+            Couvrir les cultures sensibles.
+
+  # ── Arrosage ──────────────────────────────────────────────────────────────
+  # À écrire après une saison de mesures. Les conditions à prévoir :
+  #   - humidité du sol sous un seuil (à calibrer par culture)
+  #   - pas de pluie récente ni annoncée
+  #   - créneau horaire (tôt le matin, évaporation minimale)
+  #   - température au-dessus de 0 °C

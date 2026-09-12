@@ -1,0 +1,114 @@
+# Palantír — chauffage
+#
+# Le point d'architecture de ce fichier : la sonde interne du TRV-ZBT mesure la
+# température AU RADIATEUR, donc systématiquement surévaluée. Le TRVZB accepte
+# une sonde externe, et c'est la SNZB-02D de la pièce qui doit faire référence.
+#
+# Zigbee2MQTT expose le champ mais NE FAIT PAS la synchronisation : il faut
+# republier périodiquement la valeur de la sonde vers le TRV. D'où
+# l'automatisation ci-dessous, et surtout son repli.
+#
+# Nécessite Zigbee2MQTT >= 2.1.2. Si `external_temperature_input` n'apparaît pas
+# sur la page de l'appareil, mettre à jour Z2M et le convertisseur.
+
+input_number:
+  zone_salon_consigne:
+    name: "Salon — consigne"
+    min: 12
+    max: 24
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+
+automation:
+  # ── Synchronisation sonde → vanne ─────────────────────────────────────────
+  - id: trv_salon_sync_sonde_externe
+    alias: "Salon — sonde SNZB-02D vers TRV"
+    description: >-
+      Republie la température de la pièce vers le TRV. Déclenchée à chaque
+      nouvelle mesure, et rappelée toutes les 15 minutes : le TRV oublie la
+      valeur externe s'il ne la reçoit plus.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: sensor.zone_salon_sonde_temperature
+      - trigger: time_pattern
+        minutes: "/15"
+    conditions:
+      # Ne rien publier si la sonde est muette : mieux vaut basculer sur la
+      # sonde interne (voir l'automatisation suivante) que figer une valeur.
+      - condition: template
+        value_template: >-
+          {{ states('sensor.zone_salon_sonde_temperature') not in
+             ['unknown', 'unavailable', 'none'] }}
+    actions:
+      - action: mqtt.publish
+        data:
+          topic: "palantir/zigbee/zone.salon.trv/set"
+          payload: >-
+            {"external_temperature_input":
+             {{ states('sensor.zone_salon_sonde_temperature') | float }}}
+
+  # ── Repli sur la sonde interne ────────────────────────────────────────────
+  # Sans ce garde-fou, une pile vide fige la température vue par le TRV : la
+  # vanne régule alors sur une valeur qui ne bouge plus — pièce glaciale ou
+  # radiateur qui chauffe en continu.
+  - id: trv_salon_repli_sonde_interne
+    alias: "Salon — repli sur sonde interne du TRV"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.zone_salon_sonde_temperature
+        to:
+          - "unavailable"
+          - "unknown"
+        for: "00:45:00"
+    actions:
+      - action: mqtt.publish
+        data:
+          topic: "palantir/zigbee/zone.salon.trv/set"
+          payload: '{"temperature_sensor_select": "internal"}'
+      - action: notify.persistent_notification
+        data:
+          title: "🌡️ Salon"
+          message: >-
+            Sonde SNZB-02D muette depuis 45 min. Le TRV régule à nouveau sur sa
+            sonde interne (mesure biaisée). Vérifier la pile CR2450.
+
+  # Retour à la sonde externe dès que la pièce reparle.
+  - id: trv_salon_retour_sonde_externe
+    alias: "Salon — retour sur sonde externe"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.zone_salon_sonde_temperature
+        from:
+          - "unavailable"
+          - "unknown"
+        for: "00:05:00"
+    actions:
+      - action: mqtt.publish
+        data:
+          topic: "palantir/zigbee/zone.salon.trv/set"
+          payload: '{"temperature_sensor_select": "external"}'
+
+  # ── Piles faibles ─────────────────────────────────────────────────────────
+  # Sondes et vannes sont sur pile. Une pile vide ne se voit pas : elle se
+  # traduit par une régulation silencieusement fausse.
+  - id: chauffage_piles_faibles
+    alias: "Chauffage — pile faible sur une sonde ou une vanne"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id:
+          - sensor.zone_salon_sonde_battery
+          - sensor.zone_salon_trv_battery
+        below: 20
+    actions:
+      - action: notify.persistent_notification
+        data:
+          title: "🔋 Chauffage"
+          message: >-
+            {{ trigger.to_state.name }} : batterie à
+            {{ trigger.to_state.state }} %.

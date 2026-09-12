@@ -1,0 +1,96 @@
+# Palantír — énergie
+#
+# Trois sources de comptage, trois rôles distincts :
+#
+#   ZLinky_TIC (Zigbee)  → frontière avec le réseau : soutirage, injection,
+#                          index tarifaires. Référence de facturation.
+#   DIRIS Digiware       → ventilation par départ au tableau (voir modbus.yaml)
+#   S60ZBTPF (Zigbee)    → comptage d'appoint sur prises isolées
+#
+# ⚠️ Le ZLinky doit être en mode TIC `standard` : le mode `historique` ne
+#    remonte pas l'injection proprement, ce qui rend le bilan hydro/solaire
+#    inexploitable. Si le compteur est encore en historique, la bascule se
+#    demande à Enedis.
+
+template:
+  - sensor:
+      # Bilan instantané : positif = on tire du réseau, négatif = on injecte.
+      - name: "Bilan réseau"
+        unique_id: bilan_reseau
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >-
+          {{ (states('sensor.compteur_linky_active_power') | float(0))
+             - (states('sensor.compteur_linky_active_power_injected') | float(0)) }}
+        availability: >-
+          {{ states('sensor.compteur_linky_active_power') not in
+             ['unknown', 'unavailable', 'none'] }}
+
+      # Production locale totale, hydro + solaire.
+      - name: "Production locale"
+        unique_id: production_locale
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >-
+          {{ (states('sensor.hydro_puissance') | float(0))
+             + (states('sensor.solaire_puissance') | float(0)) }}
+
+      # Surplus réellement disponible : ce qu'on produit moins ce qu'on
+      # consomme. C'est cette valeur qui déclenche les charges opportunistes,
+      # pas la production brute.
+      - name: "Surplus disponible"
+        unique_id: surplus_disponible
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >-
+          {{ [0, (states('sensor.production_locale') | float(0))
+                 - (states('sensor.consommation_totale') | float(0))] | max }}
+
+automation:
+  # ── Arrêt de production ───────────────────────────────────────────────────
+  # L'hydro tourne en continu : une production nulle en pleine journée est une
+  # anomalie (crue, colmatage, défaut), pas une variation normale.
+  - id: hydro_arret_production
+    alias: "Hydro — production arrêtée"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.hydro_puissance
+        below: 10
+        for: "00:30:00"
+    actions:
+      - action: notify.persistent_notification
+        data:
+          title: "💧 Production hydro"
+          message: >-
+            Production quasi nulle depuis 30 minutes. Vérifier la prise d'eau
+            et la turbine.
+
+  # ── Charge opportuniste sur surplus ───────────────────────────────────────
+  # Squelette : bascule l'appoint ECS quand le surplus est franc et durable.
+  # Les seuils sont volontairement larges — l'appoint ECS ne doit pas
+  # s'enclencher sur un passage de nuage.
+  #
+  # ⚠️ À activer seulement une fois la logique de chauffage en place : charger
+  #    l'ECS à l'électricité pendant que la chaudière bois a du tampon
+  #    disponible serait un gaspillage.
+  #
+  # - id: ecs_charge_sur_surplus
+  #   alias: "ECS — appoint électrique sur surplus"
+  #   mode: single
+  #   triggers:
+  #     - trigger: numeric_state
+  #       entity_id: sensor.surplus_disponible
+  #       above: 1500
+  #       for: "00:10:00"
+  #   conditions:
+  #     - condition: numeric_state
+  #       entity_id: sensor.ecs_1_temperature
+  #       below: 55
+  #   actions:
+  #     - action: switch.turn_on
+  #       target:
+  #         entity_id: switch.prise_ecs_appoint

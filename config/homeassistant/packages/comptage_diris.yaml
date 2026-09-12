@@ -1,0 +1,67 @@
+# Palantír — Socomec DIRIS Digiware M-50 : protocoles d'intégration
+#
+# Le M-50 parle Modbus RTU, Modbus TCP, BACnet IP et SNMP, en RS485 ou
+# Ethernet. Les trois voies IP sont exploitables ; elles ne se valent pas côté
+# Home Assistant.
+#
+# ┌──────────────┬─────────────────────────────┬──────────────────────────────┐
+# │ Protocole    │ Support Home Assistant      │ Usage retenu                 │
+# ├──────────────┼─────────────────────────────┼──────────────────────────────┤
+# │ Modbus TCP   │ Intégration native, mature  │ ✅ Voie principale — toutes  │
+# │              │ Accès à toute la table      │    les grandeurs électriques │
+# ├──────────────┼─────────────────────────────┼──────────────────────────────┤
+# │ SNMP         │ Plateforme sensor native,   │ 🩺 Supervision de la         │
+# │              │ mais 1 sensor = 1 OID :     │    passerelle (disponibilité,│
+# │              │ verbeux pour de la mesure   │    état), pas la mesure      │
+# ├──────────────┼─────────────────────────────┼──────────────────────────────┤
+# │ BACnet IP    │ Pas d'intégration native ;  │ 🔁 Voie de repli si Modbus   │
+# │              │ nécessite un pont tiers     │    pose problème             │
+# │              │ (BACnet → MQTT)             │                              │
+# └──────────────┴─────────────────────────────┴──────────────────────────────┘
+#
+# Pourquoi Modbus reste la voie principale : c'est la seule qui donne accès à
+# l'ensemble de la table de mesure sans composant supplémentaire, et la
+# définition des capteurs vit dans ce dépôt (../modbus.yaml).
+#
+# Pourquoi garder SNMP quand même : il répond à une question que Modbus ne
+# traite pas bien — « la passerelle est-elle vivante ? ». Un timeout Modbus ne
+# dit pas si le problème vient du M-50, du bus Digiware ou du réseau.
+#
+# Si BACnet devient nécessaire, il faudra ajouter un conteneur passerelle
+# BACnet→MQTT à la pile ; Home Assistant consommera alors du MQTT comme pour
+# le Zigbee, sans intégration supplémentaire.
+
+sensor:
+  # ── Supervision de la passerelle par SNMP ─────────────────────────────────
+  # Décommenter après avoir activé SNMP sur le M-50 et vérifié la communauté.
+  # sysUpTime : si la valeur repart de zéro, la passerelle a redémarré — ce qui
+  # explique d'éventuels trous dans l'historique Modbus.
+  #
+  # - platform: snmp
+  #   name: "DIRIS M-50 uptime"
+  #   host: !secret diris_host
+  #   community: !secret diris_snmp_community
+  #   baseoid: 1.3.6.1.2.1.1.3.0
+  #   version: "2c"
+  #   scan_interval: 300
+  #
+  # - platform: snmp
+  #   name: "DIRIS M-50 description"
+  #   host: !secret diris_host
+  #   community: !secret diris_snmp_community
+  #   baseoid: 1.3.6.1.2.1.1.1.0
+  #   version: "2c"
+  #   scan_interval: 3600
+
+binary_sensor:
+  # Disponibilité de la passerelle, déduite de la fraîcheur des mesures Modbus.
+  # Une mesure figée depuis plus de 5 minutes signale une chaîne rompue :
+  # M-50, bus Digiware ou réseau.
+  - platform: template
+    sensors:
+      diris_m50_disponible:
+        friendly_name: "DIRIS M-50 disponible"
+        device_class: connectivity
+        value_template: >-
+          {{ states('sensor.diris_depart_1_puissance_active') not in
+             ['unknown', 'unavailable', 'none'] }}

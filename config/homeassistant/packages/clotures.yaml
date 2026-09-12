@@ -1,0 +1,88 @@
+# Palantír — clôtures électriques (chevaux)
+#
+# Fonction la plus critique du projet : un cheval derrière une clôture morte
+# part. Deux règles guident tout ce fichier :
+#
+#   1. La clôture ne dépend pas du serveur. `power_on_behavior = on` est réglé
+#      sur chaque prise S60ZBTPF : après une coupure secteur, l'électrificateur
+#      se ré-alimente seul, sans attendre le NAS, le Wi-Fi ni Zigbee2MQTT.
+#      À vérifier depuis l'interface Zigbee2MQTT pour chaque prise.
+#
+#   2. On surveille la consommation, pas l'état du relais. Une prise peut être
+#      « ON » avec un électrificateur grillé : c'est `power` qui dit la vérité.
+#
+# ⚠️ À adapter : les noms d'entités supposent des prises nommées
+#    `cloture.pre_nord` etc. dans Zigbee2MQTT. Le seuil de puissance dépend du
+#    modèle d'électrificateur — le relever en fonctionnement normal avant de
+#    figer la valeur.
+
+template:
+  - binary_sensor:
+      - name: "Clôture pré nord en service"
+        unique_id: cloture_pre_nord_en_service
+        device_class: problem
+        # « problem » est vrai quand ça va mal : ici, prise allumée mais
+        # consommation nulle — donc électrificateur hors service.
+        state: >-
+          {{ is_state('switch.cloture_pre_nord', 'on')
+             and (states('sensor.cloture_pre_nord_power') | float(0)) < 1 }}
+        availability: >-
+          {{ states('sensor.cloture_pre_nord_power') not in
+             ['unknown', 'unavailable', 'none'] }}
+
+automation:
+  # ── Panne d'électrificateur ────────────────────────────────────────────────
+  - id: cloture_pre_nord_panne
+    alias: "Clôture pré nord — électrificateur hors service"
+    description: >-
+      Prise commandée en marche mais consommation nulle pendant 5 minutes.
+      La temporisation évite les fausses alertes au moment des relevés.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.cloture_pre_nord_en_service
+        to: "on"
+        for: "00:05:00"
+    actions:
+      - action: notify.persistent_notification
+        data:
+          title: "⚡ Clôture pré nord"
+          message: >-
+            L'électrificateur ne consomme plus alors que la prise est en
+            marche. Vérifier l'appareil sur place.
+
+  # ── Perte de contact avec la prise ────────────────────────────────────────
+  # Distinct du cas précédent : ici on ne sait plus rien. Le silence n'est pas
+  # une bonne nouvelle — la clôture est peut-être coupée sans qu'on le voie.
+  - id: cloture_pre_nord_injoignable
+    alias: "Clôture pré nord — prise injoignable"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: switch.cloture_pre_nord
+        to: "unavailable"
+        for: "00:15:00"
+    actions:
+      - action: notify.persistent_notification
+        data:
+          title: "📡 Clôture pré nord"
+          message: >-
+            La prise ne répond plus depuis 15 minutes : maillage Zigbee ou
+            alimentation. L'état réel de la clôture est inconnu.
+
+  # ── Coupure volontaire prolongée ──────────────────────────────────────────
+  # Garde-fou contre l'oubli : on coupe pour intervenir, et on oublie de
+  # remettre.
+  - id: cloture_coupee_trop_longtemps
+    alias: "Clôture — coupée depuis plus de 2 h"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: switch.cloture_pre_nord
+        to: "off"
+        for: "02:00:00"
+    actions:
+      - action: notify.persistent_notification
+        data:
+          title: "⚠️ Clôture pré nord"
+          message: "Coupée depuis 2 heures. Oubli après intervention ?"

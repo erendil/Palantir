@@ -1,0 +1,12 @@
+# Palantír — équipements Zigbee
+#
+# Renseigné automatiquement par Zigbee2MQTT lors des appairages.
+# Convention de nommage (friendly_name) — toujours préférer un nom stable à
+# l'adresse IEEE dans les automatisations :
+#
+#   zone.<piece>.sonde        SNZB-02D   ex. zone.salon.sonde
+#   zone.<piece>.trv          TRV-ZBT    ex. zone.salon.trv
+#   cloture.<parcelle>        S60ZBTPF   ex. cloture.pre_nord
+#   prise.<usage>             S60ZBTPF   ex. prise.ecs_appoint
+#   relais.<lieu>             S60ZBTPF   ex. relais.grange  (routeur de maillage)
+#   compteur.linky            ZLinky_TIC

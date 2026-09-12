@@ -1,0 +1,20 @@
+# Palantír — source de données Grafana
+# Le jeton et l'organisation viennent des variables d'environnement du
+# conteneur, elles-mêmes issues de .env : aucun secret dans ce fichier.
+
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    jsonData:
+      version: Flux
+      organization: ${INFLUXDB_ORG}
+      defaultBucket: ${INFLUXDB_BUCKET}
+      tlsSkipVerify: true
+    secureJsonData:
+      token: ${INFLUXDB_TOKEN}
+    editable: false

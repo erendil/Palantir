@@ -1,0 +1,16 @@
+# Palantír — provisionnement des tableaux de bord
+# Les fichiers JSON déposés dans dashboards/ sont chargés au démarrage.
+
+apiVersion: 1
+
+providers:
+  - name: Palantír
+    orgId: 1
+    folder: Palantír
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

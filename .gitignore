@@ -1,0 +1,28 @@
+# Secrets et variables d'environnement
+.env
+config/homeassistant/secrets.yaml
+config/mosquitto/passwd
+
+# Données d'exécution (montées en volume sur le NAS, jamais versionnées)
+data/
+
+# État généré par Home Assistant
+config/homeassistant/.storage/
+config/homeassistant/.cloud/
+config/homeassistant/*.db
+config/homeassistant/*.db-*
+config/homeassistant/*.log
+config/homeassistant/*.log.*
+config/homeassistant/tts/
+config/homeassistant/deps/
+config/homeassistant/backups/
+
+# État généré par Zigbee2MQTT (base des appairages, logs, coordinator backup)
+config/zigbee2mqtt/database.db
+config/zigbee2mqtt/database.db.backup
+config/zigbee2mqtt/state.json
+config/zigbee2mqtt/coordinator_backup.json
+config/zigbee2mqtt/log/
+
+# Divers
+.DS_Store
