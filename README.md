@@ -115,6 +115,58 @@ ssh -i ~/.ssh/id_ed25519 erendil@192.168.0.5 'docker ps'
 Tout le parc SONOFF (SNZB-02D, S60ZBTPF, TRV-ZBT) est en **Zigbee**, géré par
 **Zigbee2MQTT** qui publie sur Mosquitto. Un seul coordinateur pour l'ensemble.
 
+### Comment fonctionne la passerelle
+
+Le Zigbee est un **réseau radio maillé**, sans IP : les équipements se parlent de proche en proche.
+Ce réseau a besoin d'un **coordinateur** — un et un seul — qui en est la racine : il fixe le canal,
+détient la clé réseau et autorise les nouveaux équipements à rejoindre. Le coordinateur n'est
+**qu'une puce radio**, pas un ordinateur : il ne décide rien, il transmet.
+
+L'intelligence, c'est **Zigbee2MQTT**, qui tourne sur le NAS. Il lui faut donc un **lien série**
+vers une puce radio. Dans le montage classique, c'est une clé USB : `/dev/ttyUSB0`.
+
+Le ZBBridge-P contient **deux puces** :
+
+| Puce | Rôle |
+|---|---|
+| **ESP32** | Un petit ordinateur Wi-Fi |
+| **CC2652** | La radio Zigbee — l'équivalent exact d'une clé USB |
+
+**Sorti du carton**, l'ESP32 fait tourner le firmware eWeLink : la passerelle est autonome et parle
+au cloud SONOFF. Ce n'est pas ce qu'on veut — on perdrait le « local d'abord ».
+
+**Après flashage**, les rôles changent complètement : l'ESP32 ne décide plus rien, il devient un
+simple **câble série qui passe par le Wi-Fi**. Il prend les octets que la radio CC2652 produit et
+les recopie sur une connexion TCP, et inversement. Le CC2652, lui, redevient exactement ce qu'est
+une clé USB — simplement posé ailleurs dans la maison.
+
+D'où la configuration : `tcp://<ip>:8888` **remplace** `/dev/ttyUSB0`. C'est le même montage, avec
+un câble plus long.
+
+```
+  Capteurs Zigbee              ZBBridge-P                        NAS
+ ┌──────────────┐        ┌────────────────────┐        ┌────────────────────┐
+ │ SNZB-02D     │        │  CC2652            │        │  Zigbee2MQTT       │
+ │ TRV-ZBT      │◄─radio─┤  (la radio)        │        │  (l'intelligence)  │
+ │ S60ZBTPF     │ Zigbee │       ▲            │        │        ▲           │
+ │ ZLinky_TIC   │        │       │ série      │        │        │           │
+ └──────────────┘        │       ▼            │        │        │           │
+                         │  ESP32 / Tasmota   │◄──TCP──┤  tcp://ip:8888     │
+                         │  (le câble)        │  Wi-Fi │        │           │
+                         └────────────────────┘        │        ▼           │
+                                                       │  MQTT → Home Assist.│
+                                                       └────────────────────┘
+```
+
+**Trois conséquences pratiques :**
+
+1. **L'emplacement de la passerelle détermine la portée du réseau**, puisque c'est là qu'est
+   l'antenne. Le NAS peut rester dans sa baie ; le ZBBridge-P, non.
+2. **Si le Wi-Fi tombe**, Zigbee2MQTT perd sa radio et ne voit plus rien — mais le réseau Zigbee
+   lui-même et les appairages sont intacts, et tout revient seul à la reconnexion.
+3. **Une IP fixe est obligatoire** (réservation DHCP) : Zigbee2MQTT se connecte à une adresse
+   écrite en dur dans `.env`.
+
 ### Coordinateur : SONOFF ZBBridge-P
 
 Matériel déjà disponible : une **passerelle SONOFF Zigbee Bridge Pro (ZBBridge-P)**. Elle sert de
