@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "palantir",
+  "project_id": "edc87279-316b-4ac5-b926-baeb1673d731"
+}
